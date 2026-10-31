@@ -1,0 +1,35 @@
+[project]
+name = "prefect-agent-mcp"
+version = "0.1.0"
+description = "MCP control plane for explicitly registered Prefect workflows"
+requires-python = ">=3.12,<3.15"
+dependencies = [
+  "prefect==3.9.0",
+  "mcp==2.3.0",
+  "pydantic==2.14.2",
+  "langgraph==1.2.19",
+  "langgraph-checkpoint-sqlite>=3,<4",
+  "sqlalchemy>=2,<3",
+  "aiosqlite>=0.21,<1",
+  "alembic>=1.15,<2",
+  "pydantic-settings>=2,<3",
+  "jsonschema>=4,<5",
+]
+
+[dependency-groups]
+dev = ["pytest>=8,<10", "pytest-asyncio>=1,<2", "ruff>=0.12,<1", "mypy>=1.16,<2"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project.scripts]
+prefect-agent-mcp = "prefect_agent_mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["prefect_agent_mcp"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
