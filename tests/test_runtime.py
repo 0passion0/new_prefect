@@ -2,15 +2,15 @@
 
 import asyncio
 import json
-import sys
 from types import SimpleNamespace
 from uuid import uuid4
 
 import httpx
-from mcp import Client, StdioServerParameters
+import pytest
+from mcp import Client
 from sqlalchemy.exc import SQLAlchemyError
 
-from prefect_agent_mcp import control as control_module
+from prefect_agent_mcp import app as app_module
 from prefect_agent_mcp import runtime as runtime_module
 from prefect_agent_mcp import server
 from prefect_agent_mcp.control import CommandService, FlowCommand
@@ -128,23 +128,6 @@ async def test_mcp_subscription_follows_committed_snapshot(tmp_path, monkeypatch
         assert snapshot and snapshot[0]["state"] == "RUNNING"
 
 
-async def test_stdio_subprocess(tmp_path):
-    """验证真实 stdio 子进程返回结构化结果。"""
-    params = StdioServerParameters(
-        command=sys.executable,
-        args=["-m", "prefect_agent_mcp.server"],
-        env={
-            "PREFECT_MCP_DB": str(tmp_path / "stdio.db"),
-            "PREFECT_MCP_REGISTRY": str(tmp_path / "missing.json"),
-            "PREFECT_MCP_ALLOW_WRITE": "0",
-        },
-    )
-    async with Client(params) as client:
-        result = await client.call_tool("list_workflows", {})
-        assert result.structured_content["ok"] is True
-        assert result.structured_content["data"] == []
-
-
 async def test_offline_flow_returns_last_authorized_snapshot(tmp_path, monkeypatch):
     """验证断线时返回带过期标记的授权快照。"""
     deployment_id, flow_id = uuid4(), uuid4()
@@ -257,7 +240,7 @@ async def test_cancel_command_does_not_repeat_an_unknown_outcome(tmp_path, monke
         raise RuntimeError("数据库暂时不可用")
 
     monkeypatch.setattr(runtime, "flow", authorized)
-    monkeypatch.setattr(control_module, "get_client", FakeClient)
+    monkeypatch.setattr(runtime, "client", FakeClient)
     monkeypatch.setattr(store, "complete_command", fail_to_save)
     service = CommandService(runtime)
     first = await service.execute("cancel", str(flow_id), {}, "cancel-1")
@@ -289,3 +272,15 @@ async def test_invalid_tool_result_and_resource_error_are_isolated(
         result = json.loads(resource.contents[0].text)
         assert result["error"] == "INTERNAL_ERROR"
         assert "内部敏感信息" not in str(result)
+
+
+def test_http_writes_require_prefect_auth(monkeypatch):
+    """开启 HTTP 写操作前必须配置 Prefect 的身份认证。"""
+    monkeypatch.setattr(app_module, "runtime", SimpleNamespace(writable=True))
+    monkeypatch.setattr(
+        app_module,
+        "PREFECT_SERVER_API_AUTH_STRING",
+        SimpleNamespace(value=lambda: None),
+    )
+    with pytest.raises(RuntimeError, match="身份认证"):
+        app_module.create_app()

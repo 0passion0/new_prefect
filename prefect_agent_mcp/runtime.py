@@ -11,6 +11,7 @@ from uuid import UUID
 
 import httpx
 from prefect import get_client
+from prefect.client.orchestration import PrefectClient
 from prefect.client.schemas.filters import (
     FlowRunFilter,
     FlowRunFilterDeploymentId,
@@ -32,6 +33,7 @@ class Runtime:
         registry: Registry,
         writable: bool = False,
         notify: Callable[[str], Awaitable[None]] | None = None,
+        client_factory: Callable[[], PrefectClient] | None = None,
     ) -> None:
         """配置运行时依赖。
 
@@ -39,11 +41,13 @@ class Runtime:
         :param registry: 操作员配置的白名单。
         :param writable: 是否允许本地进程执行写操作。
         :param notify: 快照提交后使用的资源变更回调。
+        :param client_factory: 创建 Prefect 客户端的工厂。
         """
         self.store = store
         self.registry = registry
         self.writable = writable
         self.notify = notify
+        self.client_factory = client_factory
 
     @classmethod
     def from_environment(cls) -> Runtime:
@@ -62,6 +66,15 @@ class Runtime:
             registry,
             os.getenv("PREFECT_MCP_ALLOW_WRITE") == "1",
         )
+
+    def client(self) -> PrefectClient:
+        """创建访问当前 Prefect API 的客户端。
+
+        :return: Prefect 客户端。
+        """
+        if self.client_factory is not None:
+            return self.client_factory()
+        return get_client()
 
     def workflow(self, workflow_id: str) -> Workflow:
         """查找白名单中的工作流。
@@ -94,7 +107,7 @@ class Runtime:
         """
         try:
             workflow = self.workflow(workflow_id)
-            async with get_client() as client:
+            async with self.client() as client:
                 deployment = await client.read_deployment(workflow.deployment_id)
             return Result(
                 ok=True,
@@ -129,7 +142,7 @@ class Runtime:
         :return: 实时或带过期标记的运行状态。
         """
         try:
-            async with get_client() as client:
+            async with self.client() as client:
                 run = await client.read_flow_run(flow_run_id)
             if not self.authorized(run.deployment_id):
                 return Result(
@@ -189,7 +202,7 @@ class Runtime:
                 last_synced_at=parent.last_synced_at,
             )
         try:
-            async with get_client() as client:
+            async with self.client() as client:
                 runs = await client.read_task_runs(
                     flow_run_filter=FlowRunFilter(
                         id=FlowRunFilterId(any_=[flow_run_id])
@@ -240,7 +253,7 @@ class Runtime:
         """
         try:
             workflow = self.workflow(workflow_id)
-            async with get_client() as client:
+            async with self.client() as client:
                 runs = await client.read_flow_runs(
                     flow_run_filter=FlowRunFilter(
                         deployment_id=FlowRunFilterDeploymentId(

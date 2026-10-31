@@ -1526,6 +1526,7 @@ source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
     { name = "alembic" },
+    { name = "fastapi" },
     { name = "jsonschema" },
     { name = "langgraph" },
     { name = "langgraph-checkpoint-sqlite" },
@@ -1534,6 +1535,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "sqlalchemy" },
+    { name = "uvicorn" },
 ]
 
 [package.dev-dependencies]
@@ -1548,6 +1550,7 @@ dev = [
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.21,<1" },
     { name = "alembic", specifier = ">=1.15,<2" },
+    { name = "fastapi", specifier = ">=0.128,<1" },
     { name = "jsonschema", specifier = ">=4,<5" },
     { name = "langgraph", specifier = "==1.2.19" },
     { name = "langgraph-checkpoint-sqlite", specifier = ">=3,<4" },
@@ -1556,6 +1559,7 @@ requires-dist = [
     { name = "pydantic", specifier = "==2.14.2" },
     { name = "pydantic-settings", specifier = ">=2,<3" },
     { name = "sqlalchemy", specifier = ">=2,<3" },
+    { name = "uvicorn", specifier = ">=0.37,<1" },
 ]
 
 [package.metadata.requires-dev]

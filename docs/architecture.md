@@ -12,7 +12,7 @@
 
 ## 当前边界
 
-外部 MCP 客户端 -> stdio MCPServer -> Prefect 客户端 -> Prefect Server -> 示例 `serve` 进程。SQLite 只存采样后的元信息及命令键，不修改 Prefect 数据库。后台轮询提交快照之后向本进程订阅总线发布提示。LangGraph 的 Checkpoint 在执行流程的进程中写入独立本地 SQLite。
+外部 MCP 客户端 -> Prefect FastAPI（同一端口的 `/api/mcp/`）-> 进程内 Prefect 客户端 -> Prefect API。示例 `serve` 进程仅负责执行工作流。SQLite 只存采样后的元信息及命令键，不修改 Prefect 数据库。后台轮询提交快照之后向本进程订阅总线发布提示。LangGraph 的 Checkpoint 在执行流程的进程中写入独立本地 SQLite。
 
 ## 离最终需求仍缺少
 
@@ -20,7 +20,7 @@
 
 ## 代码职责与扩展
 
-- `Runtime` 负责白名单和运行查询，通过可注入的回调通知资源变化，不直接持有 MCP 总线。
+- `Runtime` 负责白名单和运行查询；注入的 Prefect 客户端直接访问本进程的 Prefect API，回调只负责通知资源变化。
 - `FlowCommand` 定义控制命令的校验和执行接口；`StartFlowCommand`、`CancelFlowCommand` 分别实现具体语义。`CommandService` 统一处理权限、幂等和执行结果，新增命令应继承基类并登记到命令映射，同时明确未完成请求能否安全重试。
 - `Store` 负责快照、观察记录和命令记录的数据库事务；`Monitor` 负责定期采集。
 - MCP 工具和资源边界转换内部错误，工具结果先经过统一契约及 JSON 序列化验证；参数校验仍由 Pydantic 和部署 Schema 执行。Prefect 任务失败仍由 Prefect 记录，避免将失败误报为成功。

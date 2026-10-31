@@ -72,9 +72,13 @@ async def test_live_prefect_run_through_mcp(tmp_path, monkeypatch):
                 break
             await asyncio.sleep(1)
         assert state == "COMPLETED", result.structured_content
-        tasks = await client.call_tool("list_task_runs", {"flow_run_id": run_id})
-        assert tasks.structured_content["ok"], tasks.structured_content
-        items = tasks.structured_content["data"]["items"]
+        for _ in range(20):
+            tasks = await client.call_tool("list_task_runs", {"flow_run_id": run_id})
+            assert tasks.structured_content["ok"], tasks.structured_content
+            items = tasks.structured_content["data"]["items"]
+            if len(items) == 5:
+                break
+            await asyncio.sleep(1)
         assert len(items) == 5
         analyzed = next(
             item for item in items if item["name"].startswith("agent_analyze")

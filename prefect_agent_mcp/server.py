@@ -1,4 +1,4 @@
-"""MCP 标准输入输出服务与接口。"""
+"""挂载到 Prefect FastAPI 的 MCP 工具与资源。"""
 
 from __future__ import annotations
 
@@ -325,12 +325,3 @@ async def timeline_resource(flow_run_id: str) -> str:
     """
     result = await _run_resource(flow_run_id, get_run_timeline)
     return result
-
-
-def main() -> None:
-    """启动本地 stdio MCP 服务。"""
-    mcp.run()
-
-
-if __name__ == "__main__":
-    main()

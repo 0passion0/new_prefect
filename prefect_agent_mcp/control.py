@@ -11,7 +11,6 @@ from uuid import UUID
 
 import httpx
 import jsonschema
-from prefect import get_client
 from prefect.client.schemas.objects import State, StateType
 from prefect.exceptions import PrefectException
 from sqlalchemy.exc import SQLAlchemyError
@@ -68,7 +67,7 @@ class StartFlowCommand(FlowCommand):
         """
         workflow = self.runtime.workflow(self.identity)
         self.deployment_id = workflow.deployment_id
-        async with get_client() as client:
+        async with self.runtime.client() as client:
             deployment = await client.read_deployment(self.deployment_id)
         if len(json.dumps(self.payload, ensure_ascii=False).encode("utf-8")) > 65536:
             return Result(
@@ -92,7 +91,7 @@ class StartFlowCommand(FlowCommand):
         :param key: 本次请求的幂等键。
         :return: 新建或已存在的运行标识。
         """
-        async with get_client() as client:
+        async with self.runtime.client() as client:
             run = await client.create_flow_run_from_deployment(
                 self.deployment_id, parameters=self.payload, idempotency_key=key
             )
@@ -125,7 +124,7 @@ class CancelFlowCommand(FlowCommand):
         :param key: 已登记的幂等键。
         :return: Prefect 对取消请求的处理结果。
         """
-        async with get_client() as client:
+        async with self.runtime.client() as client:
             response = await client.set_flow_run_state(
                 self.flow_id, state=State(type=StateType.CANCELLING, name="Cancelling")
             )

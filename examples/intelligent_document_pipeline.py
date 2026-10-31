@@ -12,6 +12,11 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 from prefect import flow, task
 from prefect.runtime import flow_run, task_run
+from prefect.settings import (
+    PREFECT_CLIENT_METRICS_ENABLED,
+    PREFECT_RUNNER_SERVER_ENABLE,
+    temporary_settings,
+)
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -191,4 +196,7 @@ async def intelligent_document_pipeline(
 
 
 if __name__ == "__main__":
-    intelligent_document_pipeline.serve(name="local-demo")
+    with temporary_settings(
+        {PREFECT_RUNNER_SERVER_ENABLE: False, PREFECT_CLIENT_METRICS_ENABLED: False}
+    ):
+        intelligent_document_pipeline.serve(name="local-demo")
