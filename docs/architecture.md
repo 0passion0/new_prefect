@@ -12,7 +12,11 @@
 
 ## 当前边界
 
-外部 MCP 客户端 -> Prefect FastAPI（同一端口的 `/api/mcp/`）-> 进程内 Prefect 客户端 -> Prefect API。示例 `serve` 进程仅负责执行工作流。SQLite 只存采样后的元信息及命令键，不修改 Prefect 数据库。后台轮询提交快照之后向本进程订阅总线发布提示。LangGraph 的 Checkpoint 在执行流程的进程中写入独立本地 SQLite。
+外部 MCP 客户端 -> 现有 Prefect FastAPI（同一端口的 `/api/mcp/`）-> 进程内 Prefect 客户端 -> 同一 Prefect API。适配器只接受现有应用，不创建或启动服务器。示例 `serve` 进程仅负责执行工作流。SQLite 只存采样后的元信息及命令键，不修改 Prefect 数据库。后台轮询提交快照之后向本进程订阅总线发布提示。LangGraph 的 Checkpoint 在执行流程的进程中写入独立本地 SQLite。
+
+## 原生命令的接入限制
+
+Prefect 3.9 的 `prefect server start` 固定创建其服务应用，已核查的公开插件钩子仅覆盖环境和数据库连接参数，并不提供 FastAPI 路由挂载钩子。因此，`install_prefect_mcp(app)` 必须由 Prefect 应用的启动入口显式调用；原生命令不会自动加载本项目。当前没有采用修改 Prefect 内部函数的隐式注入。
 
 ## 离最终需求仍缺少
 

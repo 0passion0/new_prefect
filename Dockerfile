@@ -9,4 +9,5 @@ COPY migrations ./migrations
 RUN uv sync --locked --no-dev && mkdir /data && chown 10001:10001 /data
 USER 10001:10001
 ENV HOME=/data PREFECT_HOME=/data/prefect PREFECT_MCP_DB=/data/prefect-monitor.db
-ENTRYPOINT ["/app/.venv/bin/prefect-agent-mcp"]
+
+# 由现有 Prefect 后端挂载适配器并启动服务。

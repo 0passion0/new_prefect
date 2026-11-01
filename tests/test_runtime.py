@@ -2,11 +2,13 @@
 
 import asyncio
 import json
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from uuid import uuid4
 
 import httpx
 import pytest
+from fastapi import FastAPI
 from mcp import Client
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -283,4 +285,45 @@ def test_http_writes_require_prefect_auth(monkeypatch):
         SimpleNamespace(value=lambda: None),
     )
     with pytest.raises(RuntimeError, match="身份认证"):
-        app_module.create_app()
+        app_module.install_prefect_mcp(FastAPI())
+
+
+async def test_install_reuses_existing_app_and_lifespan(monkeypatch):
+    """在已有应用中挂载一次，并按顺序启动和关闭原有生命周期。"""
+    lifecycle = []
+
+    @asynccontextmanager
+    async def host_lifespan(_app):
+        lifecycle.append("prefect_start")
+        yield
+        lifecycle.append("prefect_stop")
+
+    @asynccontextmanager
+    async def mcp_lifespan():
+        lifecycle.append("mcp_start")
+        yield
+        lifecycle.append("mcp_stop")
+
+    host = FastAPI(lifespan=host_lifespan)
+    api = FastAPI()
+    host.api_app = api
+    host.mount("/api", api)
+    fake_mcp = SimpleNamespace(
+        streamable_http_app=lambda **_kwargs: FastAPI(),
+        session_manager=SimpleNamespace(run=mcp_lifespan),
+    )
+    runtime = SimpleNamespace(writable=False, client_factory=None)
+    monkeypatch.setattr(app_module, "runtime", runtime)
+    monkeypatch.setattr(app_module, "mcp", fake_mcp)
+    monkeypatch.setattr(
+        app_module,
+        "PREFECT_SERVER_API_AUTH_STRING",
+        SimpleNamespace(value=lambda: None),
+    )
+    app_module.install_prefect_mcp(host)
+    app_module.install_prefect_mcp(host)
+    assert sum(route.path == "/mcp" for route in api.routes) == 1
+    async with host.router.lifespan_context(host):
+        assert lifecycle == ["prefect_start", "mcp_start"]
+    assert lifecycle == ["prefect_start", "mcp_start", "mcp_stop", "prefect_stop"]
+    assert runtime.client_factory is not None
