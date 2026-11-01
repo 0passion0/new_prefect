@@ -13,7 +13,7 @@ from typing import Any, ClassVar
 from uuid import UUID, uuid4
 
 import httpx
-import jsonschema
+import jsonschema  # type: ignore[import-untyped]
 from prefect.client.schemas.objects import State, StateType
 from prefect.exceptions import PrefectException
 from sqlalchemy.exc import SQLAlchemyError
@@ -80,14 +80,23 @@ class StartFlowCommand(FlowCommand):
             )
         schema = deployment.parameter_openapi_schema
         if not schema:
+            if self.payload:
+                return Result(
+                    ok=False,
+                    error="INVALID_INPUT",
+                    message="Deployment accepts no parameters",
+                )
+            return None
+        if set(self.payload) - set(schema.get("properties", {})):
+            return Result(ok=False, error="INVALID_INPUT", message="Unknown parameter")
+        try:
+            jsonschema.validate(instance=self.payload, schema=schema)
+        except jsonschema.ValidationError as exc:
             return Result(
                 ok=False,
                 error="INVALID_INPUT",
-                message="Deployment has no parameter schema",
+                message=f"Parameters reject schema: {exc.message}",
             )
-        if set(self.payload) - set(schema.get("properties", {})):
-            return Result(ok=False, error="INVALID_INPUT", message="Unknown parameter")
-        jsonschema.validate(instance=self.payload, schema=schema)
         return None
 
     async def perform(self, key: str) -> Result:
@@ -171,8 +180,8 @@ async def submit_recovery(
                 **parameters,
             },
         )
-    except Exception:  # noqa: BLE001 - 提交后可能已入队，需要保留标识供查询
-        logging.getLogger(__name__).error("恢复任务投递结果未知：%s", task_id)
+    except Exception:
+        logging.getLogger(__name__).exception("恢复任务投递结果未知：%s", task_id)
         return Result(
             ok=False,
             data=data,

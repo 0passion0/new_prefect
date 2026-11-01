@@ -18,14 +18,25 @@ class Monitor:
         self.runtime = runtime
 
     async def run(self) -> None:
-        """持续采样；单个工作流出错不会中断后续采样。"""
+        """持续采样；单个工作流或任务出错不会中断后续采样。"""
         while True:
             for workflow in self.runtime.registry.workflows:
                 try:
                     recent = await self.runtime.flows(workflow.workflow_id, 20, 0)
                     if recent.ok:
-                        for item in recent.data["items"]:
-                            await self.runtime.tasks(UUID(item["id"]), 100, 0)
-                except Exception:  # noqa: BLE001 - 后台采集必须隔离单次故障
-                    logging.getLogger(__name__).error("工作流状态采集失败")
+                        for item in recent.data.get("items", []):
+                            try:
+                                await self.runtime.tasks(UUID(item["id"]), 100, 0)
+                            except Exception:
+                                logging.getLogger(__name__).warning(
+                                    "Flow %s 任务状态采集失败",
+                                    item.get("id"),
+                                    exc_info=True,
+                                )
+                except Exception:
+                    logging.getLogger(__name__).warning(
+                        "工作流 %s 状态采集失败",
+                        workflow.workflow_id,
+                        exc_info=True,
+                    )
             await asyncio.sleep(30)

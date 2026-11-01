@@ -21,7 +21,7 @@ dependencies = [
 prefect-agent-mcp = "prefect_agent_mcp.plugin"
 
 [dependency-groups]
-dev = ["pytest>=8,<10", "pytest-asyncio>=1,<2", "ruff>=0.12,<1", "mypy>=1.16,<2"]
+dev = ["pytest>=8,<10", "pytest-asyncio>=1,<2", "ruff>=0.12,<1", "mypy>=1.16,<2", "types-jsonschema>=4.23.0.20241208"]
 
 [build-system]
 requires = ["hatchling"]

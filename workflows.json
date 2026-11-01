@@ -1,0 +1,10 @@
+{
+  "workflows": [
+    {
+      "deployment_id": "bf2d15d7-f88c-4cc1-a11d-5202ae19a085",
+      "description": "本地文档处理示例",
+      "version": "1",
+      "workflow_id": "document"
+    }
+  ]
+}

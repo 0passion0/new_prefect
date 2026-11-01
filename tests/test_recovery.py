@@ -203,3 +203,75 @@ async def test_unknown_submission_keeps_ids_and_is_not_repeated(tmp_path, monkey
         calls[0]
     )
     await store.engine.dispose()
+
+
+async def test_execute_recovery_fn_recovers_from_checkpoint(tmp_path, monkeypatch):
+    """验证 execute_recovery 函数能够从 checkpoint_id 分叉恢复。"""
+    from prefect_agent_mcp import recovery_graph
+    from prefect_agent_mcp.recovery_worker import execute_recovery
+
+    calls = []
+
+    def a(value, return_state):
+        calls.append("A")
+        return FakeState(value + 1)
+
+    def b(value, divisor, return_state):
+        calls.append("B")
+        return FakeState(value / divisor) if divisor else FakeState(failed=True)
+
+    def c(value, return_state):
+        calls.append("C")
+        return FakeState(value * 2)
+
+    monkeypatch.setattr(recovery_graph, "task_a", a)
+    monkeypatch.setattr(recovery_graph, "task_b", b)
+    monkeypatch.setattr(recovery_graph, "task_c", c)
+
+    monitor_path = str(tmp_path / "monitor.db")
+    checkpoint_path = str(tmp_path / "checkpoints.db")
+    store = Store(monitor_path)
+    await store.initialize()
+
+    run_id = str(uuid4())
+    task1_id = str(uuid4())
+    await store.create_recovery(run_id, task1_id)
+
+    # 首次执行：除以 0 导致失败
+    execute_recovery.fn(
+        run_id=run_id,
+        task_id=task1_id,
+        monitor_path=monitor_path,
+        checkpoint_path=checkpoint_path,
+        parameters={"value": 10, "divisor": 0},
+    )
+
+    rec1 = await store.recovery(run_id)
+    assert rec1["status"] == "FAILED"
+
+    # 获取失败节点的 task_run_id 与检查点
+    history = graph_history(checkpoint_path, run_id)
+    failed_b = next(r for r in history if r["node"] == "B" and r["state"] == "FAILED")
+    node, checkpoint_id = retry_checkpoint(
+        checkpoint_path, run_id, failed_b["task_run_id"], {"divisor": 2}
+    )
+    assert node == "B"
+    assert checkpoint_id
+
+    # 从检查点恢复执行
+    task2_id = str(uuid4())
+    assert await store.claim_recovery(run_id, task2_id)
+    execute_recovery.fn(
+        run_id=run_id,
+        task_id=task2_id,
+        monitor_path=monitor_path,
+        checkpoint_path=checkpoint_path,
+        parameters={"divisor": 2},
+        node=node,
+        checkpoint_id=checkpoint_id,
+    )
+
+    rec2 = await store.recovery(run_id)
+    assert rec2["status"] == "COMPLETED"
+
+    await store.engine.dispose()

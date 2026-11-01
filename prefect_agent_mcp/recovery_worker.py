@@ -1,5 +1,6 @@
 """由 Prefect Task Worker 执行和恢复固定工作流。"""
 
+import logging
 import sqlite3
 from datetime import UTC, datetime
 from typing import Any
@@ -53,5 +54,8 @@ def execute_recovery(
                 )
         update_status(monitor_path, run_id, task_id, result["status"])
     except Exception:
+        logging.getLogger(__name__).exception(
+            "恢复任务执行失败：%s, task_id=%s", run_id, task_id
+        )
         update_status(monitor_path, run_id, task_id, "FAILED")
         raise

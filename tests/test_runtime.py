@@ -363,3 +363,89 @@ async def test_install_reuses_existing_app_and_lifespan(monkeypatch):
         assert lifecycle == ["prefect_start", "mcp_start"]
     assert lifecycle == ["prefect_start", "mcp_start", "mcp_stop", "prefect_stop"]
     assert runtime.client_factory is not None
+
+
+async def test_start_flow_validates_parameter_openapi_schema(tmp_path, monkeypatch):
+    """验证 start_flow 正确根据 parameter_openapi_schema 校验参数。"""
+    deployment_id = uuid4()
+    flow_run_id = uuid4()
+    workflow_id = "doc-process"
+    schema = {
+        "type": "object",
+        "properties": {
+            "source_path": {"type": "string"},
+            "max_chunks": {"type": "integer"},
+        },
+        "required": ["source_path"],
+    }
+
+    registry = Registry(
+        workflows=[
+            Workflow(
+                workflow_id=workflow_id,
+                deployment_id=deployment_id,
+                description="测试工作流",
+            )
+        ]
+    )
+    store = Store(str(tmp_path / "start-flow.db"))
+    await store.initialize()
+    runtime = Runtime(store, registry, writable=True)
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def read_deployment(self, dep_id):
+            assert dep_id == deployment_id
+            return SimpleNamespace(
+                parameter_openapi_schema=schema,
+                parameters={"max_chunks": 10},
+            )
+
+        async def create_flow_run_from_deployment(
+            self, dep_id, parameters, idempotency_key
+        ):
+            assert dep_id == deployment_id
+            assert idempotency_key == "key-1"
+            return SimpleNamespace(id=flow_run_id)
+
+    monkeypatch.setattr(runtime, "client", FakeClient)
+    service = CommandService(runtime)
+
+    # 1. 合法参数成功
+    valid = await service.execute(
+        "start",
+        workflow_id,
+        {"source_path": "/data/report.pdf", "max_chunks": 5},
+        "key-1",
+    )
+    assert valid.ok is True
+    assert valid.data["flow_run_id"] == str(flow_run_id)
+
+    # 2. 未知参数被拦截
+    unknown = await service.execute(
+        "start",
+        workflow_id,
+        {"source_path": "/data/report.pdf", "unknown_param": 123},
+        "key-2",
+    )
+    assert unknown.ok is False
+    assert unknown.error == "INVALID_INPUT"
+    assert "Unknown parameter" in unknown.message
+
+    # 3. 类型不符合 Schema 被拦截
+    type_mismatch = await service.execute(
+        "start",
+        workflow_id,
+        {"source_path": 12345},  # 应当为 string
+        "key-3",
+    )
+    assert type_mismatch.ok is False
+    assert type_mismatch.error == "INVALID_INPUT"
+    assert "reject schema" in type_mismatch.message
+
+    await store.engine.dispose()
