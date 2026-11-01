@@ -15,8 +15,9 @@ from mcp.server import MCPServer
 from mcp.server.subscriptions import InMemorySubscriptionBus
 from mcp.shared.subscriptions import ResourceUpdated
 
-from .control import CommandService
+from .control import CommandService, recovery_checkpoint_path
 from .monitoring import Monitor
+from .recovery_graph import graph_history, graph_state
 from .runtime import Runtime
 from .schemas import Result
 
@@ -212,17 +213,58 @@ async def cancel_flow(flow_run_id: UUID, idempotency_key: str) -> Result:
 
 @mcp.tool()
 @safe_tool
-async def retry_task(flow_run_id: UUID, task_run_id: UUID) -> Result:
-    """说明当前不支持独立重试任意任务。
+async def start_recoverable_workflow(
+    value: int, divisor: int, idempotency_key: str
+) -> Result:
+    """启动内置的可恢复 A → B → C 示例，返回业务运行标识。"""
+    return await CommandService(runtime).execute(
+        "start_recovery",
+        "example",
+        {"value": value, "divisor": divisor},
+        idempotency_key,
+    )
 
-    :param flow_run_id: 工作流运行标识。
-    :param task_run_id: 任务运行标识。
-    :return: 当前不支持该操作的错误信息。
-    """
-    return Result(
-        ok=False,
-        error="UNSUPPORTED",
-        message="Independent task replay requires an authorized checkpoint and side-effect policy",
+
+@mcp.tool()
+@safe_tool
+async def get_recoverable_run(run_id: UUID) -> Result:
+    """查询业务状态、真实 Prefect Task Run 与检查点数据。"""
+    record = await runtime.store.recovery(str(run_id))
+    if not record:
+        return Result(
+            ok=False, error="NOT_AVAILABLE", message="Recoverable run not found"
+        )
+    state = await asyncio.to_thread(
+        graph_state, recovery_checkpoint_path(), str(run_id)
+    )
+    return Result(ok=True, data={**record, "checkpoint": state})
+
+
+@mcp.tool()
+@safe_tool
+async def get_recoverable_history(run_id: UUID) -> Result:
+    """查询业务运行各分支的 Task Run 与输入输出。"""
+    if not await runtime.store.recovery(str(run_id)):
+        return Result(
+            ok=False, error="NOT_AVAILABLE", message="Recoverable run not found"
+        )
+    history = await asyncio.to_thread(
+        graph_history, recovery_checkpoint_path(), str(run_id)
+    )
+    return Result(ok=True, data=history)
+
+
+@mcp.tool()
+@safe_tool
+async def retry_task(
+    run_id: UUID, task_run_id: UUID, parameters: dict[str, Any], idempotency_key: str
+) -> Result:
+    """修改已授权 Task 的输入，从其前置检查点继续后续步骤。"""
+    return await CommandService(runtime).execute(
+        "retry_recovery",
+        str(run_id),
+        {"task_run_id": str(task_run_id), "parameters": parameters},
+        idempotency_key,
     )
 
 

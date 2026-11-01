@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
+import os
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any, ClassVar
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 import jsonschema
@@ -15,6 +18,8 @@ from prefect.client.schemas.objects import State, StateType
 from prefect.exceptions import PrefectException
 from sqlalchemy.exc import SQLAlchemyError
 
+from .recovery_graph import RecoveryInput, retry_checkpoint
+from .recovery_worker import execute_recovery
 from .runtime import Runtime
 from .schemas import Result
 
@@ -128,11 +133,111 @@ class CancelFlowCommand(FlowCommand):
             response = await client.set_flow_run_state(
                 self.flow_id, state=State(type=StateType.CANCELLING, name="Cancelling")
             )
-        accepted = response.status.value == "ACCEPT"
+        # Prefect 会将未启动的运行直接转为 CANCELLED，并返回 REJECT。
+        accepted = response.status.value == "ACCEPT" or (
+            response.status.value == "REJECT"
+            and response.state is not None
+            and response.state.type == StateType.CANCELLED
+        )
         return Result(
             ok=accepted,
             data={"orchestration_status": response.status.value},
             error=None if accepted else "STATE_REJECTED",
+        )
+
+
+def recovery_checkpoint_path() -> str:
+    """返回服务端与 Task Worker 共用的检查点路径。"""
+    return str(
+        Path(os.getenv("PREFECT_MCP_RECOVERY_DB", "prefect-recovery.db")).absolute()
+    )
+
+
+async def submit_recovery(
+    runtime: Runtime, run_id: str, task_id: str, parameters: dict[str, Any]
+) -> Result:
+    """投递失败时保留运行和任务标识，供调用方核实。"""
+    data = {"run_id": run_id, "execution_task_run_id": task_id}
+    try:
+        await execute_recovery.create_run(
+            client=runtime.client(),
+            id=UUID(task_id),
+            deferred=True,
+            parameters={
+                "run_id": run_id,
+                "task_id": task_id,
+                "monitor_path": str(runtime.store.path),
+                "checkpoint_path": recovery_checkpoint_path(),
+                **parameters,
+            },
+        )
+    except Exception:  # noqa: BLE001 - 提交后可能已入队，需要保留标识供查询
+        logging.getLogger(__name__).error("恢复任务投递结果未知：%s", task_id)
+        return Result(
+            ok=False,
+            data=data,
+            error="OUTCOME_UNKNOWN",
+            message="Inspect the execution task before retrying",
+        )
+    return Result(ok=True, data=data)
+
+
+class StartRecoveryCommand(FlowCommand):
+    """启动固定的可恢复示例，业务运行与 Prefect Flow Run 分开。"""
+
+    async def validate(self) -> Result | None:
+        RecoveryInput.model_validate(self.payload)
+        return None
+
+    async def perform(self, key: str) -> Result:
+        run_id, task_id = str(uuid4()), str(uuid4())
+        await self.runtime.store.create_recovery(run_id, task_id)
+        return await submit_recovery(
+            self.runtime, run_id, task_id, {"parameters": self.payload}
+        )
+
+
+class RetryRecoveryCommand(FlowCommand):
+    """从指定 Task 的前置检查点恢复。"""
+
+    node: str
+    checkpoint_id: str
+
+    async def validate(self) -> Result | None:
+        UUID(self.identity)
+        if not await self.runtime.store.recovery(self.identity):
+            return Result(
+                ok=False, error="NOT_AVAILABLE", message="Recoverable run not found"
+            )
+        UUID(self.payload["task_run_id"])
+        if len(json.dumps(self.payload, ensure_ascii=False).encode("utf-8")) > 65536:
+            return Result(
+                ok=False, error="INVALID_INPUT", message="Parameters exceed 64 KiB"
+            )
+        self.node, self.checkpoint_id = await asyncio.to_thread(
+            retry_checkpoint,
+            recovery_checkpoint_path(),
+            self.identity,
+            self.payload["task_run_id"],
+            self.payload["parameters"],
+        )
+        return None
+
+    async def perform(self, key: str) -> Result:
+        task_id = str(uuid4())
+        if not await self.runtime.store.claim_recovery(self.identity, task_id):
+            return Result(
+                ok=False, error="BUSY", message="Recoverable run is already executing"
+            )
+        return await submit_recovery(
+            self.runtime,
+            self.identity,
+            task_id,
+            {
+                "parameters": self.payload["parameters"],
+                "node": self.node,
+                "checkpoint_id": self.checkpoint_id,
+            },
         )
 
 
@@ -142,6 +247,8 @@ class CommandService:
     commands: ClassVar[dict[str, type[FlowCommand]]] = {
         "start": StartFlowCommand,
         "cancel": CancelFlowCommand,
+        "start_recovery": StartRecoveryCommand,
+        "retry_recovery": RetryRecoveryCommand,
     }
 
     def __init__(self, runtime: Runtime) -> None:

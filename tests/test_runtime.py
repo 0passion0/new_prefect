@@ -10,6 +10,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from mcp import Client
+from prefect.client.schemas.objects import StateType
 from sqlalchemy.exc import SQLAlchemyError
 
 from prefect_agent_mcp import app as app_module
@@ -249,6 +250,41 @@ async def test_cancel_command_does_not_repeat_an_unknown_outcome(tmp_path, monke
     second = await service.execute("cancel", str(flow_id), {}, "cancel-1")
     assert first.error == second.error == "OUTCOME_UNKNOWN"
     assert calls == [(flow_id, "CANCELLING")]
+    await store.engine.dispose()
+
+
+@pytest.mark.parametrize("state, expected", [("CANCELLED", True), ("RUNNING", False)])
+async def test_cancel_recognizes_prefect_alternative_state(
+    tmp_path, monkeypatch, state, expected
+):
+    """Prefect 将待运行流程直接取消时，不应误报取消失败。"""
+    flow_id = uuid4()
+    store = Store(str(tmp_path / "cancel-state.db"))
+    await store.initialize()
+    runtime = Runtime(store, Registry(), writable=True)
+
+    async def authorized(_flow_id):
+        return Result(ok=True, data={"id": str(flow_id)})
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def set_flow_run_state(self, run_id, state):
+            return SimpleNamespace(
+                status=SimpleNamespace(value="REJECT"),
+                state=SimpleNamespace(type=StateType[result_state]),
+            )
+
+    result_state = state
+    monkeypatch.setattr(runtime, "flow", authorized)
+    monkeypatch.setattr(runtime, "client", FakeClient)
+    result = await CommandService(runtime).execute("cancel", str(flow_id), {}, "key")
+    assert result.ok is expected
+    assert result.error == (None if expected else "STATE_REJECTED")
     await store.engine.dispose()
 
 

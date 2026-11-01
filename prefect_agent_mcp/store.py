@@ -21,8 +21,9 @@ class Store:
 
         :param path: SQLite 数据库文件路径。
         """
+        self.path = Path(path).absolute()
         self.engine: AsyncEngine = create_async_engine(
-            f"sqlite+aiosqlite:///{Path(path).absolute().as_posix()}"
+            f"sqlite+aiosqlite:///{self.path.as_posix()}"
         )
 
         @event.listens_for(self.engine.sync_engine, "connect")
@@ -55,6 +56,48 @@ class Store:
                     "CREATE TABLE IF NOT EXISTS commands (idempotency_key TEXT PRIMARY KEY, operation TEXT NOT NULL, request_hash TEXT NOT NULL, result TEXT, created_at TEXT NOT NULL)"
                 )
             )
+            await conn.execute(
+                text(
+                    "CREATE TABLE IF NOT EXISTS recovery_runs (id TEXT PRIMARY KEY, status TEXT NOT NULL, execution_task_id TEXT NOT NULL, updated_at TEXT NOT NULL)"
+                )
+            )
+
+    async def create_recovery(self, run_id: str, task_id: str) -> None:
+        """登记新的业务运行和待执行的 Prefect Task。"""
+        async with self.engine.begin() as conn:
+            await conn.execute(
+                text("INSERT INTO recovery_runs VALUES (:id, 'QUEUED', :task, :now)"),
+                {"id": run_id, "task": task_id, "now": utcnow().isoformat()},
+            )
+
+    async def claim_recovery(self, run_id: str, task_id: str) -> bool:
+        """原子锁定已结束的业务运行，避免并发重放。"""
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                text(
+                    "UPDATE recovery_runs SET status='QUEUED', execution_task_id=:task, updated_at=:now "
+                    "WHERE id=:id AND status IN ('COMPLETED', 'FAILED')"
+                ),
+                {"id": run_id, "task": task_id, "now": utcnow().isoformat()},
+            )
+            return bool(result.rowcount)
+
+    async def recovery(self, run_id: str) -> dict[str, Any] | None:
+        """读取业务运行和当前执行任务的状态。"""
+        async with self.engine.connect() as conn:
+            row = (
+                (
+                    await conn.execute(
+                        text(
+                            "SELECT id, status, execution_task_id, updated_at FROM recovery_runs WHERE id=:id"
+                        ),
+                        {"id": run_id},
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            return dict(row) if row else None
 
     async def save(
         self, kind: str, entity_id: str, flow_id: str, data: dict[str, Any]
